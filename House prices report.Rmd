@@ -1,3 +1,16 @@
+---
+title: "House Prices Analysis"
+author: "Gregoire Mansio"
+date: "28/07/2021"
+output: pdf_document
+---
+
+
+This data-science project has been conducted for the EdX Capstone Part 2
+
+
+```{r setup, echo = FALSE, message = FALSE, results = FALSE, warning=FALSE}
+
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
 if(!require(rmarkdown)) install.packages("rmarkdown", repos = "http://cran.us.r-project.org")
 if(!require(readxl)) install.packages("readxl", repos = "http://cran.us.r-project.org")
@@ -10,21 +23,39 @@ if(!require(randomForest)) install.packages("randomForest", repos = "http://cran
 
 set.seed(1, sample.kind="Rounding")
 
-# Downloading the files and loading them into the environment
+```
 
+# Introduction
+
+This pdf document is a data analysis of house prices in Ames, Iowa, USA. The dataset has been gathered by Dean De Cock and is available on Kaggle at the following link: https://www.kaggle.com/c/house-prices-advanced-regression-techniques/overview
+
+Otherwise, the provided script automatically download the required files from my github page and load them into the Rstudio environment.
+
+```{r , echo=FALSE}
 download.file(url = "https://github.com/gregmansio/houseprices/blob/master/data/train.csv", destfile = "train.csv")
 download.file(url = "https://github.com/gregmansio/houseprices/blob/master/data/test.csv", destfile = "test.csv")
+
 
 train_set <- fread(input = "./data/train.csv", sep = ",", nrows = -1, header = TRUE, check.names = TRUE, blank.lines.skip = TRUE, data.table = TRUE, strip.white = TRUE, stringsAsFactors = FALSE, na.strings = c("NA", "N/A", "NULL"))
 test_set <- fread(input = "./data/test.csv", sep = ",", nrows = -1, header = TRUE, check.names = TRUE, blank.lines.skip = TRUE, data.table = TRUE, strip.white = TRUE, stringsAsFactors = FALSE, na.strings = c("NA", "N/A", "NULL"))
 
-#test_set$SalePrice <- 0 # creation of the SalePrice column missing from the test_set
-#full_set <- rbind(train_set, test_set) # assembling the two sets for visualization purposes
+```
 
 
-###-----Data exploration, visualization, and treatment-----
-summary(train_set) # get summary statistics
+The purpose of the present data science analysis is to predict a continuous outcome: house sale prices. We first make use of visualization tools before applying two different models, a standard linear regression and then a random forest algorithm.
 
+The dataset contains 79 variables and 2919 observations that have been collected between 2006 and 2010, time span of sells. Because the number of variables is already large, we won't create new variables from combinations of existing ones.
+
+
+# Data exploration, analyses and methods
+
+## Visualisation
+
+
+A considerable number of features are of character type, and some won't be used for this first analysis. Moreover, many of those characters features, and several numerical ones have a single value weight very high, which means that they have a very low variance, and therefore aren't really usefull to do modelisation. I choose to exclude them completely.
+
+
+```{r Zero Variance variables, echo = TRUE}
 zerovar_names <- nearZeroVar(train_set, names=TRUE) # Checking for low variance variables
 zerovar_index <- nearZeroVar(train_set)
 
@@ -32,8 +63,18 @@ miscval_dens <- ggplot(train_set, aes(x =train_set$ MiscVal)) +
   geom_density(colour = "deepskyblue4") +
   xlab("Value of miscellaneous feature") +
   ylab("Density")
-miscval_dens
 
+miscval_dens
+```
+
+
+The above density graph shows for example that the 'MiscVal' feature has almost only 0 as value. 
+Also, we have some features with many missing values. We will exclude those as well.
+The second histogram below also shows that the variance of PoolArea can not be useful for us as almost 100% of the observations are zeros. This coincide with what the nearZeroVar function previously found.
+
+
+
+```{r Zeros and NAs, echo = FALSE, , message = FALSE, results = FALSE}
 NA_Zeros <- df_status(train_set) # information about NAs and zeros
 
 NAs <- ggplot(filter(NA_Zeros,q_na > 5), aes(reorder(variable, p_na),p_na)) +
@@ -44,6 +85,7 @@ NAs <- ggplot(filter(NA_Zeros,q_na > 5), aes(reorder(variable, p_na),p_na)) +
   coord_flip()
 NAs # Plotting of NAs to have a visual on variables to potentially discard
 
+
 Zeros <- ggplot(filter(NA_Zeros,q_zeros > 0), aes(reorder(variable, p_zeros),p_zeros)) +
   ggtitle("Proportion of zeros") +
   ylab("%") +
@@ -52,16 +94,33 @@ Zeros <- ggplot(filter(NA_Zeros,q_zeros > 0), aes(reorder(variable, p_zeros),p_z
   coord_flip()
 Zeros # Plotting of Zeros to have a visual on variables to potentially discard
 
+```
+
+## Transformation
+
+First thing to do is remove the variables with too many missing values and those with a really low variance
+
+```{r Treatment of features, echo = FALSE, , message = FALSE}
+
 train_set <- train_set %>% select (-all_of(zerovar_index), -PoolQC, -Fence, -Alley, -FireplaceQu) # filterout variables with too many NAs, with low Var and lot of zeros
 test_set <- test_set %>% select (-all_of(zerovar_index), -PoolQC, -Fence, -Alley, -FireplaceQu)
 
+```
 
-# Full NA treatment - Using mostly the most common value as replacement
+
+After that, we have to take care of other variables presenting NAs in acceptable proportions. This is a very tedious operation that requires an inspection of features one by one. But this operation can also be automated with a degree of approximation.
+For example, I created a function to find the most common value for a given variable, and then used this value to replace the NAs.
+
+
+```{r Most common value as replacing value, echo = TRUE, warning=FALSE}
 Mostcommon <- function(x) {
   sort(table(x), decreasing = TRUE)[1]
 }
 
 train_set[is.na(KitchenQual), KitchenQual := Mostcommon(train_set$KitchenQual)]
+```
+
+```{r Other replacements, echo = FALSE, , warning=FALSE}
 train_set[is.na(GarageFinish) & GarageType == "Detchd", ':=' 
          (GarageFinish = "Fin",
            GarageCars = 1,
@@ -82,6 +141,7 @@ train_set[is.na(Exterior1st),':=' (Exterior1st = Mostcommon(train_set$Exterior1s
 train_set[is.na(MasVnrType),':=' (MasVnrType = "None", MasVnrArea = 0)]
 train_set[is.na(SaleType), SaleType := Mostcommon(train_set$SaleType)]
 train_set[, LotFrontage := replace(LotFrontage, is.na(LotFrontage), median(LotFrontage, na.rm=TRUE)), by=.(Neighborhood)] # Using median frontage in neighborhood
+
 
 test_set[is.na(KitchenQual), KitchenQual := Mostcommon(test_set$KitchenQual)]
 test_set[is.na(GarageFinish) & GarageType == "Detchd", ':=' 
@@ -105,12 +165,22 @@ test_set[is.na(MasVnrType),':=' (MasVnrType = "None", MasVnrArea = 0)]
 test_set[is.na(SaleType), SaleType := Mostcommon(test_set$SaleType)]
 test_set[, LotFrontage := replace(LotFrontage, is.na(LotFrontage), median(LotFrontage, na.rm=TRUE)), by=.(Neighborhood)] # Using median frontage in neighborhood
 
+```
 
-##----- Recoding 
 
+
+Other operations can be done to recode characters variables with levels into ordinal factor variables that are usable in models. Here a snippet of the code I used to do so. It is quite convenient to transform character variables effortlessly, but some problems can arise because of this operation. For example it seems that there is a typo in the 'Electrical' variable, which requires further inspection.
+
+
+
+```{r Ordinal factor recoding, echo = TRUE}
 train_set[,KitchenQual:=ordered(KitchenQual, levels = c("Po","Fa","TA","Gd","Ex"))]
 train_set[,GarageFinish:=ordered(GarageFinish, levels = c("None","Unf","RFn","Fin"))]
 train_set[,ExterQual:=ordered(ExterQual, levels = c("Po","Fa","TA","Gd","Ex"))]
+
+```
+
+```{r, echo = FALSE}
 train_set[,ExterCond:=ordered(ExterCond, levels = c("Po","Fa","TA","Gd","Ex"))]
 train_set[,BsmtExposure:=ordered(BsmtExposure, levels = c("None","No","Mn","Av","Gd"))]
 train_set[,BsmtFinType1:=ordered(BsmtFinType1, levels = c("None","Unf","LwQ","Rec","BLQ","ALQ","GLQ"))]
@@ -126,23 +196,46 @@ test_set[,BsmtFinType1:=ordered(BsmtFinType1, levels = c("None","Unf","LwQ","Rec
 test_set[,Electrical:=ordered(Electrical, levels = c("FuseP","Mix","FuseF","FuseA","SBrkr"))]
 test_set[is.na(Electrical) , Electrical  := "Mix"] # One electrical should be badly encoded so I replace it manually
 
+```
 
-###-----Correlations
+
+Now that we have cleaned the datasets, let's have some final looks at the data and build the models.
+
+
+
+## Correlations
+
+```{r Correlation plot, echo = FALSE}
 
 numeric_matrix_train <- train_set %>% dplyr::select(where(is.numeric))
 correlation_train <- cor(numeric_matrix_train, use = "everything")
 corrplot_train <- corrplot(correlation_train, method = "circle", type = 'lower', diag = TRUE, title = "Correlation matrix", tl.cex = 0.7, tl.col = "deepskyblue4", tl.srt = 30)
 
-###-----Removal of highly correlated variables
+```
+
+
+We can see on the plot below that some variable are highly correlated like 'Total basement squared ft' and 'First floor squared ft' (which make sense) and that they are almost perfectly colinear, which is absolutely not recommended in regression. I choose to purely remove one of two variables when they show multicolinearity. 
+
+
+```{r Multicolinearity correction, echo = TRUE}
 train_set <- train_set %>% select(-TotRmsAbvGrd, -TotalBsmtSF, -GarageArea, -YearRemodAdd, -GarageYrBlt, -BsmtFinSF1)
 test_set <- test_set %>% select(-TotRmsAbvGrd, -TotalBsmtSF, -GarageArea, -YearRemodAdd, -GarageYrBlt, -BsmtFinSF1)
+```
 
+
+After this final removal operation, we can take a last look at the corrected correlation matrix which synthesizes the most important variables, presumed to be the most significant ones in the upcoming algorithms.
+
+
+```{r Final corrplot, echo = FALSE}
 final_corr <- cor(train_set %>% dplyr::select(where(is.numeric)),  use = "everything")
 final_corrplot <- corrplot(final_corr,  method = "circle", type = 'lower', diag = TRUE, title = "Corrected correlation matrix", tl.cex = 0.7, tl.col = "deepskyblue4", tl.srt = 30)
 
+```
 
-###-----Sales prices plots
 
+Moreover, plotting 'Sale Price' against 'Overall Quality', as well as against 'First floor Squared ft' indeed indicates that those features are part of the most important ones, and that the model should perform well on those features.
+
+```{r SalePrice plots, echo = FALSE, , message = FALSE}
 ggplot(train_set, aes(OverallQual,SalePrice)) +  # As expected, the overall quality of the house influences the price heavily
   geom_point() +
   geom_smooth(method=lm, color = "deepskyblue4") + 
@@ -154,42 +247,64 @@ ggplot(train_set, aes(X1stFlrSF,SalePrice)) +  # As expected, the first floor su
   geom_smooth(method=lm, color = "deepskyblue4") + 
   xlab("First Floor ft²") +
   ylab("Sale Price")
+```
 
-#####----- Modeling
 
+# First model and results: Regression
+
+Before any modeling, it is important to notice that we don't have any SalePrice observation in the test_set downloadable on Kaggle. Therefore, to test the performance of our algorithm, we have to split the train_set into a train_subset and a test_subset to have an idea of the performance of the algorithms and choose the final one.
+
+
+```{r Splitting of the train_set, echo = TRUE}
 train_index <- createDataPartition(train_set$Id, times = 1, p = 0.9, list=FALSE) # First, don't forget to split the train set in two parts for training and testing
 train_subset <- train_set[train_index,]
 test_subset <- train_set[-train_index,]
 
-##---- Linear Model
+```
 
+```{r Linear regression, echo = TRUE, , warning=FALSE}
 Linear_matrix <- train_subset %>% dplyr::select(where(is.numeric)) # The first model is a simple regression, done only on numerical data
 lm_fit <- lm(data = Linear_matrix, formula = SalePrice ~ .)
 summary(lm_fit) # R² of 0.80 is a decent but perfectible score.
+```
 
+
+The linear model obtains gives the most importance to 9 variables, among which 'Overall Quality'. Surprisingly the surface of the floors isn't significant, but their effect can be captured by 'LotArea', representing the overall surface of the lot. It could be interesting to assess whether or not the 'LotArea' is positively correlated with the house surface, which would invite us to remove some of those overlapping features as we did before.
+
+Still, the performance of the model is quite good, as we end up with an RMSE of 0.1459. Let's now try the random forest.
+
+
+```{r RMSE, echo = FALSE}
 prediction_lm <- predict(lm_fit, test_subset)
-RMSE(log(test_subset$SalePrice), log(prediction_lm)) # 0.145 isn't bad but can surely be perfected as said above.
+RMSE(log(test_subset$SalePrice), log(prediction_lm))
 
-##---- Random Forest
+```
 
+
+# Second model and results: Random forest
+
+Thanks to the caret package, the random forest model is very simple to implement as long as a proper data cleaning has been made, which is the case. 
+
+
+```{r Random forest, echo = TRUE}
 random_forest <- randomForest(SalePrice ~ ., data = train_subset)
+
 prediction_rf <- predict(random_forest, test_subset)
 RMSE(log(test_subset$SalePrice), log(prediction_rf)) # 0.105 is now a very interesting result!
 
-
-##---- Final model and prediction
-
-rforest_final <- randomForest(SalePrice ~ . , data = train_set)
-rforest_final
-prediction_final <- predict(rforest_final, test_set) # Can't tell the RMSE as the SalePrice isn't existing in the official test_set of the Kaggle project.
+```
 
 
-###--- Prepare submission file
+The RMSE is now down to 0.104 which is very good for a 1459 observations dataset! 
+I won't present the last use of the random forest model (on the full train_set) because it's exactly the same methodology as the one just above, and because we aren't able to test the precision of the full model. Indeed, the test_set has no SalePrice indicated.
 
-prediction_final <- as.data.frame(prediction_final)
 
-names(prediction_final) <- "SalePrice"
-submission_file <- test_set %>% select(Id) %>% cbind(prediction_final) 
-write.csv(submission_file, file = "Kaggleprediction_v1.csv", row.names = FALSE)
+# Conclusion 
+
+The dataset is of good quality and provides us with many options. Working only with numeric variables, it already shows significant results, even if it requires some work to be really effective.
+Thanks to our two simple algorithms, we are able to predict house prices with an impressive precision. The linear regression model already shows a good R² and most importantly a good RMSE when used for prediction. Moreover, the random forest improve the RMSE by approx 30% which is unexpected but very conclusive. 
+
+Further improvements could be made. First, we could use the character variables like Neighborhood which surely influences SalePrice, by recoding those character variables with hypotheses definitions and numerically-leveled groups. Also, we could improve the linear regression with regularization and cross-validation in order to better improve the precision power. 
+Finally what could be of particular interest is a XGBoost algorithm as the random forest is particularly effective, and because it seems to be a very popular and effective ML technique.
 
 
